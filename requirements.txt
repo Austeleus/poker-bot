@@ -1,0 +1,16 @@
+torch
+torchvision
+numpy
+pandas
+matplotlib
+
+# Poker Environment
+pettingzoo[classic]
+eval7  # Hand evaluation library
+pygame
+rlcard
+
+# Utilities
+tqdm
+tensorboard
+wandb

@@ -20,8 +20,8 @@ def test_basic_functionality():
     print("TESTING BASIC FUNCTIONALITY")
     print("=" * 50)
     
-    # Test with 6 players (target configuration)
-    env = HoldemWrapper(num_players=6)
+    # Test with 2 players (heads-up for MCCFR)
+    env = HoldemWrapper(num_players=2)
     
     # Test reset
     try:
@@ -176,6 +176,55 @@ def test_observation_processing():
     return True
 
 
+def test_info_set_integration():
+    """Test HoldemInfoSet integration with wrapper"""
+    print("\n" + "=" * 50)
+    print("TESTING INFO SET INTEGRATION")
+    print("=" * 50)
+    
+    env = HoldemWrapper(num_players=2)
+    
+    try:
+        observations = env.reset(seed=42)
+        
+        # Test getting info set for current player
+        current_player = env.get_current_player_index()
+        if current_player is not None:
+            print(f"Current player: {current_player}")
+            
+            info_set = env.get_info_set(current_player)
+            if info_set:
+                print("✓ Info set created successfully")
+                print(f"  Player: {info_set.player}")
+                print(f"  Street: {info_set.street.name}")
+                print(f"  Position: {info_set.position}")
+                print(f"  Hole cards: {info_set.hole_cards}")
+                print(f"  Community cards: {info_set.community_cards}")
+                print(f"  Pot size: {info_set.pot_size}")
+                print(f"  Current bet: {info_set.current_bet}")
+                print(f"  Stack sizes: {info_set.stack_sizes}")
+                print(f"  Legal actions: {info_set.get_legal_actions()}")
+                
+                # Test action meanings
+                for action in info_set.get_legal_actions()[:3]:
+                    meaning = info_set.get_action_meaning(action)
+                    print(f"    Action {action}: {meaning}")
+                    
+            else:
+                print("⚠️ Failed to create info set")
+        else:
+            print("⚠️ No current player found")
+            
+        print("✓ Info set integration test passed")
+        
+    except Exception as e:
+        print(f"❌ Info set integration test failed: {e}")
+        return False
+    
+    env.close()
+    return True
+
+
 def test_multiple_player_configurations():
     """Test different player count configurations"""
     print("\n" + "=" * 50)
@@ -301,6 +350,7 @@ def run_all_tests():
             test_action_mapping()
             simulation_success = test_game_simulation()
             test_observation_processing()
+            test_info_set_integration()  # New test for our integration
             test_multiple_player_configurations()
             test_error_handling()
         

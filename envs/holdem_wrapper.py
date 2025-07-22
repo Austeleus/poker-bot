@@ -1,5 +1,8 @@
 """
 PettingZoo wrapper for Texas Hold'em poker environment.
+
+This wrapper provides a clean interface between PettingZoo's Texas Hold'em
+environment and our MCCFR training system using HoldemInfoSet.
 """
 
 from pettingzoo.classic import texas_holdem_no_limit_v6
@@ -7,17 +10,21 @@ import numpy as np
 import logging
 from typing import Dict, List, Tuple, Optional, Any
 
+from core.holdem_info_set import (
+    HoldemInfoSet, HoldemInfoSetManager, BettingRound, Street, HoldemAction,
+    string_to_card, card_to_string
+)
+
 
 class HoldemWrapper:
     """
-    3-player NLHE wrapper with discrete bet sizes.
+    Texas Hold'em environment wrapper for MCCFR training.
     
-    Wraps PettingZoo's Texas Hold'em environment and provides
-    a simplified interface with discrete actions and standardized
-    observations for neural network training.
+    Wraps PettingZoo's Texas Hold'em environment and provides HoldemInfoSet
+    objects for MCCFR training. Supports 2-6 players with discrete actions.
     """
     
-    def __init__(self, num_players: int = 3, render_mode: Optional[str] = None):
+    def __init__(self, num_players: int = 2, render_mode: Optional[str] = None):
         """
         Initialize the poker environment wrapper.
         
@@ -32,23 +39,37 @@ class HoldemWrapper:
             render_mode=render_mode
         )
         
-        # Discrete action mapping
+        # MCCFR-compatible action mapping using HoldemAction
         self.action_mapping = {
-            0: "fold",
-            1: "check_call", 
-            2: "raise_half_pot",
-            3: "raise_full_pot",
-            4: "all_in"
+            HoldemAction.FOLD: "fold",
+            HoldemAction.CHECK_CALL: "check_call", 
+            HoldemAction.RAISE_QUARTER_POT: "raise_quarter_pot",
+            HoldemAction.RAISE_HALF_POT: "raise_half_pot",
+            HoldemAction.RAISE_FULL_POT: "raise_full_pot",
+            HoldemAction.ALL_IN: "all_in"
         }
         
-        # Game state tracking
+        # Initialize info set manager
+        self.info_set_manager = HoldemInfoSetManager(num_players=num_players)
+        
+        # Game state tracking for MCCFR
         self.current_player = None
         self.agents = []
         self.game_over = False
-        self._pot_size = 0
-        self._last_bet = 0
-        self._player_chips = {}
+        self._pot_size = 3  # SB + BB for 2-player
+        self._current_bet = 2  # BB to call
+        self._player_stacks = [200] * num_players
         self._action_history = []  # Track action history for CFR
+        
+        # Street and betting tracking
+        self._current_street = Street.PREFLOP
+        self._betting_history: List[BettingRound] = []
+        self._current_round_actions = []
+        self._current_round_amounts = []
+        
+        # Blinds (configurable)
+        self.small_blind = 1
+        self.big_blind = 2
         
         # Logger
         self.logger = logging.getLogger(__name__)
@@ -66,13 +87,17 @@ class HoldemWrapper:
         self.env.reset(seed=seed)
         self.agents = self.env.agents[:]
         self.game_over = False
-        self._pot_size = 0
-        self._last_bet = 0
+        self._pot_size = 3  # SB + BB
+        self._current_bet = 2  # BB to call
         self._action_history = []  # Reset action history for new game
+        self._current_street = Street.PREFLOP
+        self._betting_history = []
         
-        # Initialize player chips
-        for agent in self.agents:
-            self._player_chips[agent] = 200  # Starting stack
+        # Initialize player stacks (already done in __init__)
+        # Account for blinds in 2-player
+        if self.num_players == 2:
+            self._player_stacks[0] -= self.small_blind  # Button/small blind
+            self._player_stacks[1] -= self.big_blind    # Big blind
         
         # Get initial observations
         observations = {}
@@ -472,6 +497,117 @@ class HoldemWrapper:
         if self.render_mode is not None:
             self.env.render()
     
+    def get_info_set(self, player: int) -> Optional[HoldemInfoSet]:
+        """
+        Get HoldemInfoSet for the specified player.
+        
+        Args:
+            player: Player index (0-based)
+            
+        Returns:
+            HoldemInfoSet for the player, or None if not available
+        """
+        if player < 0 or player >= self.num_players:
+            return None
+            
+        # Get current player index
+        current_player_idx = self.get_current_player_index()
+        
+        # Extract cards (simplified for now - MCCFR will sample)
+        hole_cards = (0, 1)  # Placeholder - MCCFR samples cards
+        community_cards = ()  # Empty for preflop
+        
+        # Try to get actual cards if this is the current player
+        if current_player_idx == player:
+            try:
+                obs, _, _, _, _ = self.env.last()
+                if obs is not None:
+                    extracted_hole, extracted_community = self._extract_cards_from_observation(obs['observation'], self.agents[player])
+                    if len(extracted_hole) >= 2:
+                        hole_card_ints = self._convert_cards_to_ints(extracted_hole)
+                        if len(hole_card_ints) >= 2:
+                            hole_cards = tuple(hole_card_ints[:2])
+                    
+                    if extracted_community:
+                        community_card_ints = self._convert_cards_to_ints(extracted_community)
+                        community_cards = tuple(community_card_ints)
+            except:
+                pass  # Fall back to placeholder cards
+        
+        # Create and return info set
+        try:
+            info_set = HoldemInfoSet(
+                player=player,
+                hole_cards=hole_cards,
+                community_cards=community_cards,
+                street=self._current_street,
+                betting_history=self._betting_history.copy(),
+                position=0 if player == 0 else 1,  # Button=0, BB=1 for heads-up
+                stack_sizes=tuple(self._player_stacks),
+                pot_size=self._pot_size,
+                current_bet=self._current_bet,
+                small_blind=self.small_blind,
+                big_blind=self.big_blind,
+                num_players=self.num_players
+            )
+            return info_set
+        except Exception as e:
+            self.logger.debug(f"Failed to create info set for player {player}: {e}")
+            return None
+    
+    def get_current_player_index(self) -> Optional[int]:
+        """Get current player as 0-based index."""
+        current_agent = self.env.agent_selection
+        if current_agent and current_agent in self.agents:
+            try:
+                # Check if agent is still active
+                obs, _, termination, truncation, _ = self.env.last()
+                if not (termination or truncation):
+                    return self.agents.index(current_agent)
+            except:
+                pass
+        return None
+    
+    def _convert_cards_to_ints(self, card_strings: List[str]) -> List[int]:
+        """Convert card strings to 0-51 integer format."""
+        card_ints = []
+        for card_str in card_strings:
+            try:
+                if len(card_str) == 2:
+                    # Normalize format and convert
+                    rank, suit = card_str[0].upper(), card_str[1].lower()
+                    normalized = f"{rank}{suit}"
+                    card_int = string_to_card(normalized)
+                    card_ints.append(card_int)
+            except ValueError:
+                continue
+        return card_ints
+    
+    def convert_action_to_pz(self, action: HoldemAction) -> int:
+        """Convert HoldemAction to PettingZoo action."""
+        if action == HoldemAction.FOLD:
+            return 0
+        elif action == HoldemAction.CHECK_CALL:
+            # Check if we can check vs call
+            try:
+                obs, _, _, _, _ = self.env.last()
+                if obs and 'action_mask' in obs:
+                    action_mask = obs['action_mask']
+                    if action_mask[1]:  # Can check
+                        return 1
+                    elif action_mask[2]:  # Can call
+                        return 2
+            except:
+                pass
+            return 1  # Default to check
+        elif action in [HoldemAction.RAISE_QUARTER_POT, HoldemAction.RAISE_HALF_POT, 
+                       HoldemAction.RAISE_FULL_POT]:
+            return 3  # PettingZoo uses minimum raise
+        elif action == HoldemAction.ALL_IN:
+            return 4
+        else:
+            return 1  # Default to check
+
     def close(self):
         """Close the environment."""
         self.env.close()
