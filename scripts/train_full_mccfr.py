@@ -98,47 +98,52 @@ def analyze_strategy_convergence(trainer, key_hands, iteration):
     return convergence_data, avg_entropy
 
 
-def estimate_exploitability(trainer, num_samples=10000):
+def estimate_exploitability(trainer, num_samples=1000):
     """
-    Rough exploitability estimation using random sampling.
+    Simple convergence metric based on strategy entropy.
     
-    This is a simplified version. Full exploitability requires best response computation.
+    Lower entropy = more converged strategies = lower exploitability.
+    This is a proxy metric until proper best response calculation is implemented.
     """
-    print(f"\n📊 Exploitability Estimation ({num_samples} samples):")
+    print(f"\n📊 Strategy Convergence Metric:")
     print("-" * 50)
     
-    # Sample random matchups and compute expected values
-    utilities = []
-    
+    # Sample random hands and compute strategy entropy
     from core.card_utils import generate_all_preflop_hands
     all_hands = generate_all_preflop_hands()
     
-    for _ in range(num_samples):
-        # Sample two different hands
-        sampled_hands = np.random.choice(len(all_hands), 2, replace=False)
-        hero_cards = all_hands[sampled_hands[0]]
-        villain_cards = all_hands[sampled_hands[1]]
+    entropies_p0 = []
+    entropies_p1 = []
+    
+    # Sample subset of hands for efficiency
+    sampled_hands = np.random.choice(len(all_hands), min(num_samples, len(all_hands)), replace=False)
+    
+    for hand_idx in sampled_hands:
+        hand_cards = all_hands[hand_idx]
         
         # Get strategies for both players
-        hero_strategy = trainer.get_strategy(0, hero_cards)
-        villain_strategy = trainer.get_strategy(1, villain_cards)
-        
-        # Simplified utility calculation (placeholder)
-        # In full implementation, this would simulate the game tree
-        hero_aggression = np.sum(hero_strategy[2:])  # Raising actions
-        villain_aggression = np.sum(villain_strategy[2:])
-        
-        # Simple heuristic: more aggressive player wins more often
-        utility = (hero_aggression - villain_aggression) * 0.5
-        utilities.append(utility)
+        try:
+            strategy_p0 = trainer.get_strategy(0, hand_cards)
+            strategy_p1 = trainer.get_strategy(1, hand_cards)
+            
+            # Calculate entropy (higher = more mixed, lower = more converged)
+            entropy_p0 = -np.sum(strategy_p0 * np.log(strategy_p0 + 1e-10))
+            entropy_p1 = -np.sum(strategy_p1 * np.log(strategy_p1 + 1e-10))
+            
+            entropies_p0.append(entropy_p0)
+            entropies_p1.append(entropy_p1)
+        except:
+            continue
     
-    avg_utility = np.mean(utilities)
-    std_utility = np.std(utilities)
+    avg_entropy = np.mean(entropies_p0 + entropies_p1)
     
-    print(f"Average utility: {avg_utility:.4f} ± {std_utility:.4f}")
-    print(f"Estimated exploitability: {abs(avg_utility) * 1000:.1f} mbb/hand (rough estimate)")
+    # Convert entropy to pseudo-exploitability metric (higher entropy = higher exploitability)
+    pseudo_exploitability = avg_entropy * 10  # Scale for readability
     
-    return avg_utility
+    print(f"Average strategy entropy: {avg_entropy:.3f}")
+    print(f"Convergence metric: {pseudo_exploitability:.1f} (lower = better)")
+    
+    return pseudo_exploitability
 
 
 def check_convergence_criteria(convergence_history, min_iterations=10000):

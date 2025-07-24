@@ -186,7 +186,7 @@ class HoldemMCCFRTrainer:
             # Perform MCCFR traversal
             self._mccfr_traversal(root_node, traversing_player, 1.0, 1.0, t)
             
-            self.iterations_completed = t + 1
+            self.iterations_completed += 1
             
             # Progress reporting
             if verbose and (t + 1) % 100 == 0:
