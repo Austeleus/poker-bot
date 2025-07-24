@@ -425,7 +425,7 @@ class StrategyVisualizer:
         
         # Handle suited/offsuit
         if len(hand_str) == 2:  # Pair (e.g., 'AA')
-            return (rank1 * 4, rank2 * 4)
+            return (rank1 * 4, rank2 * 4 + 1)  # Different suits for pair
         elif len(hand_str) == 3:
             if hand_str[2].lower() == 's':  # Suited
                 return (rank1 * 4, rank2 * 4)

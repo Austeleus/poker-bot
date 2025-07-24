@@ -365,37 +365,40 @@ class HoldemMCCFRTrainer:
     
     def _get_legal_actions(self, node: GameNode) -> List[int]:
         """Get legal actions for the current node."""
-        # For now, simple preflop logic
         actions = []
+        player_stack = node.player_stacks[node.player]
         
-        # Can always fold (unless can check)
+        # Can fold if there's a bet to call (can't fold when checking is free)
         if node.current_bet > 0:
             actions.append(HoldemAction.FOLD)
         
         # Can always check/call
         actions.append(HoldemAction.CHECK_CALL)
         
-        # Can raise if have enough chips
-        player_stack = node.player_stacks[node.player]
-        pot_after_call = node.pot_size + node.current_bet
-        
+        # Can raise if have enough chips for meaningful raises
         if player_stack > node.current_bet:
+            call_amount = node.current_bet
+            pot_after_call = node.pot_size + call_amount
+            remaining_after_call = player_stack - call_amount
+            
             # Quarter pot raise
             quarter_raise = pot_after_call // 4
-            if node.current_bet + quarter_raise <= player_stack:
+            if quarter_raise > 0 and quarter_raise <= remaining_after_call:
                 actions.append(HoldemAction.RAISE_QUARTER_POT)
             
             # Half pot raise
             half_raise = pot_after_call // 2
-            if node.current_bet + half_raise <= player_stack:
+            if half_raise > 0 and half_raise <= remaining_after_call:
                 actions.append(HoldemAction.RAISE_HALF_POT)
             
             # Full pot raise
-            if node.current_bet + pot_after_call <= player_stack:
+            full_raise = pot_after_call
+            if full_raise > 0 and full_raise <= remaining_after_call:
                 actions.append(HoldemAction.RAISE_FULL_POT)
             
-            # All-in
-            actions.append(HoldemAction.ALL_IN)
+            # All-in (always available if you have chips)
+            if remaining_after_call > 0:
+                actions.append(HoldemAction.ALL_IN)
         
         return actions
     
@@ -413,11 +416,11 @@ class HoldemMCCFRTrainer:
             player_1_invested = self.initial_stack - node.player_stacks[1]
             
             if node.player == 0:  # Player 0 folds, Player 1 wins
-                # Player 0 loses what they invested, Player 1 gains what Player 0 invested
+                # Player 0 loses what they invested
                 utility_for_player_0 = -player_0_invested
             else:  # Player 1 folds, Player 0 wins  
-                # Player 0 gains what Player 1 invested minus what they invested
-                utility_for_player_0 = player_1_invested - player_0_invested
+                # Player 0 gains what Player 1 invested (pure profit)
+                utility_for_player_0 = player_1_invested
             
             return GameNode(
                 node_type=NodeType.TERMINAL,
@@ -438,11 +441,13 @@ class HoldemMCCFRTrainer:
                 # Check
                 next_player = 1 - node.player
                 
-                # If both players have acted and checked, go to showdown
-                if len(new_history) >= 2 and all(act == HoldemAction.CHECK_CALL 
-                                                for _, act in new_history[-2:]):
+                # In heads-up: if BB checks after SB called, betting round ends
+                if (node.player == 1 and len(new_history) >= 1 and 
+                    new_history[-1][1] == HoldemAction.CHECK_CALL):
+                    # BB checks after SB called/limped, go to showdown
                     return self._create_showdown_node(node, new_history, new_stacks, new_pot)
                 
+                # If first to act and checking (SB limping), continue to BB
                 return GameNode(
                     node_type=NodeType.DECISION,
                     player=next_player,
@@ -461,29 +466,52 @@ class HoldemMCCFRTrainer:
                 if node.player == 0 and node.current_bet == self.big_blind and len(node.betting_history) == 0:
                     # Button calling the big blind preflop
                     call_amount = self.big_blind - self.small_blind  # Just need to complete the BB
+                    new_stacks[node.player] -= call_amount
+                    new_pot += call_amount
+                    
+                    # Special case: SB completed, now BB can raise or check to end round
+                    return GameNode(
+                        node_type=NodeType.DECISION,
+                        player=1,  # BB gets option
+                        hole_cards=node.hole_cards,
+                        community_cards=node.community_cards,
+                        street=node.street,
+                        pot_size=new_pot,
+                        current_bet=0,  # Both players have equal investment now
+                        player_stacks=tuple(new_stacks),
+                        betting_history=new_history,
+                        is_terminal=False
+                    )
                 else:
+                    # Regular call - match the current bet
                     call_amount = min(node.current_bet, new_stacks[node.player])
-                
-                new_stacks[node.player] -= call_amount
-                new_pot += call_amount
-                
-                # After calling, reset current bet and next player acts
-                return GameNode(
-                    node_type=NodeType.DECISION,
-                    player=1 - node.player,
-                    hole_cards=node.hole_cards,
-                    community_cards=node.community_cards,
-                    street=node.street,
-                    pot_size=new_pot,
-                    current_bet=0,  # Reset bet after call
-                    player_stacks=tuple(new_stacks),
-                    betting_history=new_history,
-                    is_terminal=False
-                )
+                    new_stacks[node.player] -= call_amount
+                    new_pot += call_amount
+                    
+                    # After call, betting round typically ends in heads-up
+                    # But opponent can still raise if they haven't acted yet
+                    if len(new_history) == 0:  # First action
+                        return GameNode(
+                            node_type=NodeType.DECISION,
+                            player=1 - node.player,
+                            hole_cards=node.hole_cards,
+                            community_cards=node.community_cards,
+                            street=node.street,
+                            pot_size=new_pot,
+                            current_bet=0,
+                            player_stacks=tuple(new_stacks),
+                            betting_history=new_history,
+                            is_terminal=False
+                        )
+                    else:
+                        # Both players have acted, go to showdown
+                        return self._create_showdown_node(node, new_history, new_stacks, new_pot)
         
         else:
             # Raise actions
-            pot_after_call = new_pot + node.current_bet
+            # First, player must call the current bet, then add raise amount
+            call_amount = node.current_bet
+            pot_after_call = new_pot + call_amount
             
             if action == HoldemAction.RAISE_QUARTER_POT:
                 raise_amount = pot_after_call // 4
@@ -492,17 +520,21 @@ class HoldemMCCFRTrainer:
             elif action == HoldemAction.RAISE_FULL_POT:
                 raise_amount = pot_after_call
             elif action == HoldemAction.ALL_IN:
-                raise_amount = new_stacks[node.player]
+                # All-in: bet entire stack
+                total_investment = new_stacks[node.player]
+                raise_amount = max(0, total_investment - call_amount)
             else:
                 raise_amount = 0
             
-            # Apply the raise
-            total_bet = node.current_bet + raise_amount
-            actual_bet = min(total_bet, new_stacks[node.player])
+            # Total amount to invest: call + raise
+            total_investment = call_amount + raise_amount
+            actual_investment = min(total_investment, new_stacks[node.player])
             
-            new_stacks[node.player] -= actual_bet
-            new_pot += actual_bet
-            new_current_bet = actual_bet
+            new_stacks[node.player] -= actual_investment
+            new_pot += actual_investment
+            
+            # New current bet is the raise amount (what opponent needs to call)
+            new_current_bet = actual_investment
             
             return GameNode(
                 node_type=NodeType.DECISION,
@@ -532,10 +564,10 @@ class HoldemMCCFRTrainer:
             
             # Simulate showdown outcome based on equity
             if random.random() < equity:
-                # Player 0 wins: gets back their investment + opponent's investment
+                # Player 0 wins: gains what Player 1 invested
                 utility_0 = player_1_invested
             else:
-                # Player 1 wins: Player 0 loses their investment
+                # Player 1 wins: Player 0 loses what they invested
                 utility_0 = -player_0_invested
                 
         except ValueError:

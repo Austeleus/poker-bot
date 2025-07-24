@@ -299,9 +299,33 @@ class HoldemInfoSet:
                 f"H{normalized_cards[0]},{normalized_cards[1]}",
                 f"St{self.street.value}",
                 f"Pos{self.position}",
-                f"Bet{1 if self.current_bet > 0 else 0}",
+                f"Bet{self.current_bet}",  # Include actual bet size, not just binary
                 f"Act{self.action_pointer}"  # Include action pointer to prevent aliasing
             ]
+            
+            # Add betting sequence abstraction for critical differentiation
+            if self.betting_history:
+                # Create abstracted betting sequence
+                betting_sequence = []
+                for round_info in self.betting_history:
+                    if round_info.actions:
+                        # Abstract actions to key categories: F, C, R (small), R (big), A (all-in)
+                        action_abstracts = []
+                        for action in round_info.actions:
+                            if action == HoldemAction.FOLD:
+                                action_abstracts.append('F')
+                            elif action == HoldemAction.CHECK_CALL:
+                                action_abstracts.append('C')
+                            elif action in [HoldemAction.RAISE_QUARTER_POT, HoldemAction.RAISE_HALF_POT]:
+                                action_abstracts.append('R')  # Small/medium raise
+                            elif action == HoldemAction.RAISE_FULL_POT:
+                                action_abstracts.append('B')  # Big raise
+                            elif action == HoldemAction.ALL_IN:
+                                action_abstracts.append('A')  # All-in
+                        betting_sequence.append(''.join(action_abstracts))
+                
+                if betting_sequence:
+                    parts.append(f"Seq{'_'.join(betting_sequence)}")
             
             # Add community card abstraction for multi-street
             if self.community_cards:

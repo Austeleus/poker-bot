@@ -450,7 +450,7 @@ class HoldemStrategyProfile:
         if not (0 <= player < self.num_players):
             raise ValueError(f"Invalid player {player}")
             
-        abstract_key = info_set.get_abstract_key()
+        abstract_key = info_set.get_abstract_key(use_minimal_abstraction=True)
         legal_actions = info_set.get_legal_actions()
         
         return self.regret_tables[player].get_average_strategy(abstract_key, legal_actions)
