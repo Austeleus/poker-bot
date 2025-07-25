@@ -813,7 +813,6 @@ class HoldemMCCFRTrainer:
     
     def _save_checkpoint(self, iteration: int):
         """Save training checkpoint with compression."""
-        import gzip
         import time
         
         save_start = time.time()

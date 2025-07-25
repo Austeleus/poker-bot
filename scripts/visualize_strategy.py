@@ -25,7 +25,8 @@ from typing import Dict, List, Tuple, Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from solvers.holdem_mccfr_trainer import HoldemMCCFRTrainer
-from core.card_utils import get_preflop_hand_type, get_preflop_hand_strength
+from core.card_utils import get_preflop_hand_type, get_preflop_hand_strength, card_to_string
+from core.holdem_info_set import HoldemInfoSet, Street, BettingRound
 
 
 class StrategyVisualizer:
@@ -111,6 +112,108 @@ class StrategyVisualizer:
         
         return hands
     
+    def analyze_multi_street_hand(self, hole_cards: Tuple[int, int], 
+                                  community_cards: Tuple[int, ...] = (),
+                                  street: Street = Street.PREFLOP,
+                                  player: int = 0) -> Dict:
+        """Analyze strategy for a specific hand across streets."""
+        try:
+            # Create information set for this situation
+            info_set = HoldemInfoSet(
+                player=player,
+                hole_cards=hole_cards,
+                community_cards=community_cards,
+                street=street,
+                betting_history=[BettingRound(
+                    street=street,
+                    actions=(),
+                    bet_amounts=()
+                )],
+                position=player,
+                stack_sizes=(1000, 1000),
+                pot_size=30,  # Small blind + big blind
+                current_bet=0
+            )
+            
+            # Get strategy using the information set
+            strategy = self.trainer.strategy_profile.get_average_strategy(player, info_set)
+            
+            # Format results
+            hole_str = f"{card_to_string(hole_cards[0])}{card_to_string(hole_cards[1])}"
+            board_str = "".join([card_to_string(c) for c in community_cards]) if community_cards else "None"
+            
+            return {
+                'hole_cards': hole_str,
+                'board': board_str,
+                'street': street.name,
+                'strategy': strategy.tolist(),
+                'actions': ['Fold', 'Call', 'Bet1/4', 'Bet1/2', 'Bet1x', 'All-in'],
+                'dominant_action': self.action_names[np.argmax(strategy)]
+            }
+            
+        except Exception as e:
+            return {
+                'hole_cards': f"{hole_cards[0]},{hole_cards[1]}",
+                'board': "".join([card_to_string(c) for c in community_cards]) if community_cards else "None",
+                'street': street.name,
+                'error': str(e)
+            }
+
+    def analyze_key_multi_street_situations(self, player: int = 0):
+        """Analyze key situations across different streets."""
+        print(f"\n🌳 Multi-Street Strategy Analysis (Player {player})")
+        print("=" * 80)
+        
+        # Test situations
+        situations = [
+            # Preflop premium hands
+            {
+                'name': 'AA Preflop',
+                'hole_cards': (0, 13),  # AA
+                'community_cards': (),
+                'street': Street.PREFLOP
+            },
+            {
+                'name': 'KK Preflop', 
+                'hole_cards': (1, 14),  # KK
+                'community_cards': (),
+                'street': Street.PREFLOP
+            },
+            # Flop with different textures
+            {
+                'name': 'AA on A72 rainbow',
+                'hole_cards': (0, 13),  # AA
+                'community_cards': (26, 5, 18),  # A♠ 7♣ 2♦
+                'street': Street.FLOP
+            },
+            {
+                'name': 'KK on A72 rainbow',
+                'hole_cards': (1, 14),  # KK
+                'community_cards': (26, 5, 18),  # A♠ 7♣ 2♦
+                'street': Street.FLOP
+            }
+        ]
+        
+        for situation in situations:
+            try:
+                result = self.analyze_multi_street_hand(
+                    situation['hole_cards'],
+                    situation['community_cards'], 
+                    situation['street'],
+                    player
+                )
+                
+                if 'error' not in result:
+                    print(f"\n{situation['name']}:")
+                    print(f"  Hole: {result['hole_cards']}, Board: {result['board']}")
+                    print(f"  Best Action: {result['dominant_action']}")
+                    print(f"  Strategy: {[f'{p:.3f}' for p in result['strategy']]}")
+                else:
+                    print(f"\n{situation['name']}: ERROR - {result['error']}")
+                    
+            except Exception as e:
+                print(f"\n{situation['name']}: EXCEPTION - {str(e)}")
+
     def show_basic_strategy_table(self, player: int = 0):
         """Display basic strategy table for key hands."""
         print(f"\n🃏 Basic Strategy Table (Player {player})")
@@ -461,6 +564,7 @@ def main():
     print(f"  Memory usage: {stats['total_memory_mb']:.2f} MB")
     
     # Main visualizations
+    viz.analyze_key_multi_street_situations(args.player)
     viz.show_basic_strategy_table(args.player)
     viz.show_hand_chart(args.player, args.chart_threshold)
     viz.show_detailed_hand_analysis(args.hands, args.player)

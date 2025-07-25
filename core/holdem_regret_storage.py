@@ -367,22 +367,48 @@ class HoldemRegretTable:
         self._cache_dirty.clear()
     
     def save(self, filepath: str) -> None:
-        """Save regret table to file."""
+        """Save regret table to file with compression."""
+        import gzip
+        import time
+        
+        save_start = time.time()
+        
+        # Prepare data without forcing defaultdict evaluation
         data = {
-            'regrets': dict(self.regrets),
-            'cumulative_strategies': dict(self.cumulative_strategies),
+            'regrets': dict(self.regrets.items()),  # Only save existing items
+            'cumulative_strategies': dict(self.cumulative_strategies.items()),
             'total_iterations': self.total_iterations,
-            'info_set_count': self.info_set_count,
-            'num_actions': self.num_actions
+            'info_set_count': len(self.regrets),  # Actual count
+            'num_actions': self.num_actions,
+            'use_cfr_plus': self.use_cfr_plus
         }
         
+        # Add CFR+ data if enabled
+        if self.use_cfr_plus:
+            data['positive_regret_sums'] = dict(self.positive_regret_sums.items())
+        
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, 'wb') as f:
-            pickle.dump(data, f)
+        
+        # Save with gzip compression
+        with gzip.open(filepath + '.gz', 'wb') as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        save_time = time.time() - save_start
+        size_mb = os.path.getsize(filepath + '.gz') / (1024 * 1024)
+        print(f"Saved {len(self.regrets)} info sets to {filepath}.gz ({size_mb:.1f}MB) in {save_time:.1f}s")
             
     def load(self, filepath: str) -> None:
-        """Load regret table from file."""
-        with open(filepath, 'rb') as f:
+        """Load regret table from file (supports both compressed and uncompressed)."""
+        import gzip
+        
+        # Try compressed version first
+        if os.path.exists(filepath + '.gz'):
+            filepath = filepath + '.gz'
+            opener = gzip.open
+        else:
+            opener = open
+            
+        with opener(filepath, 'rb') as f:
             data = pickle.load(f)
             
         self.regrets = defaultdict(lambda: np.zeros(self.num_actions, dtype=np.float64))
@@ -393,6 +419,12 @@ class HoldemRegretTable:
             
         for key, strategy_array in data['cumulative_strategies'].items():
             self.cumulative_strategies[key] = strategy_array
+            
+        # Restore CFR+ data if available
+        if self.use_cfr_plus and 'positive_regret_sums' in data:
+            self.positive_regret_sums = defaultdict(lambda: np.zeros(self.num_actions, dtype=np.float64))
+            for key, sums_array in data['positive_regret_sums'].items():
+                self.positive_regret_sums[key] = sums_array
             
         self.total_iterations = data.get('total_iterations', 0)
         self.info_set_count = data.get('info_set_count', len(self.regrets))
@@ -476,7 +508,10 @@ class HoldemStrategyProfile:
         """Load all player strategies from files."""
         for player in range(self.num_players):
             filepath = f"{filepath_prefix}_player_{player}.pkl"
-            if os.path.exists(filepath):
+            # Try compressed version first, then uncompressed
+            if os.path.exists(filepath + '.gz'):
+                self.regret_tables[player].load(filepath)
+            elif os.path.exists(filepath):
                 self.regret_tables[player].load(filepath)
                 
     def get_total_stats(self) -> Dict[str, any]:
