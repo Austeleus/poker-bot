@@ -10,7 +10,7 @@ This module provides essential card functionality including:
 Designed for preflop heads-up poker with the foundation to scale to multi-street.
 """
 
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Any
 import itertools
 from dataclasses import dataclass
 from enum import IntEnum
@@ -438,6 +438,213 @@ def get_hand_category(hole_cards: Tuple[int, int]) -> str:
             return "suited_gap"
     
     return "trash"
+
+
+# ==============================================================================
+# Multi-Street Community Card Dealing
+# ==============================================================================
+
+def deal_flop_cards(used_cards: set) -> Tuple[int, int, int]:
+    """
+    Deal 3 flop cards that don't conflict with used cards.
+    
+    Args:
+        used_cards: Set of card integers already in use (hole cards)
+        
+    Returns:
+        Tuple of 3 flop card integers
+        
+    Raises:
+        ValueError: If not enough cards available to deal flop
+    """
+    available_cards = [card for card in range(52) if card not in used_cards]
+    
+    if len(available_cards) < 3:
+        raise ValueError(f"Not enough cards available to deal flop. Available: {len(available_cards)}")
+    
+    import random
+    flop_cards = random.sample(available_cards, 3)
+    return tuple(flop_cards)
+
+
+def deal_turn_card(used_cards: set) -> int:
+    """
+    Deal 1 turn card that doesn't conflict with used cards.
+    
+    Args:
+        used_cards: Set of card integers already in use (hole cards + flop)
+        
+    Returns:
+        Turn card integer
+        
+    Raises:
+        ValueError: If no cards available to deal turn
+    """
+    available_cards = [card for card in range(52) if card not in used_cards]
+    
+    if len(available_cards) < 1:
+        raise ValueError("No cards available to deal turn")
+    
+    import random
+    return random.choice(available_cards)
+
+
+def deal_river_card(used_cards: set) -> int:
+    """
+    Deal 1 river card that doesn't conflict with used cards.
+    
+    Args:
+        used_cards: Set of card integers already in use (hole cards + flop + turn)
+        
+    Returns:
+        River card integer
+        
+    Raises:
+        ValueError: If no cards available to deal river
+    """
+    available_cards = [card for card in range(52) if card not in used_cards]
+    
+    if len(available_cards) < 1:
+        raise ValueError("No cards available to deal river")
+    
+    import random
+    return random.choice(available_cards)
+
+
+def get_board_texture(board: Tuple[int, ...]) -> Dict[str, Any]:
+    """
+    Analyze board texture for strategic abstraction.
+    
+    Args:
+        board: Community cards (3 for flop, 4 for turn, 5 for river)
+        
+    Returns:
+        Dict with board texture information:
+        - 'flush_draw': bool, whether there's a flush draw
+        - 'straight_draw': bool, whether there's a straight draw  
+        - 'pair': bool, whether board is paired
+        - 'trips': bool, whether board has trips
+        - 'coordinated': float, how coordinated the board is (0-1)
+    """
+    if len(board) < 3:
+        return {'flush_draw': False, 'straight_draw': False, 'pair': False, 
+                'trips': False, 'coordinated': 0.0}
+    
+    # Extract ranks and suits
+    ranks = [card_to_rank_suit(card)[0] for card in board]
+    suits = [card_to_rank_suit(card)[1] for card in board]
+    
+    # Count suits for flush draws
+    suit_counts = {}
+    for suit in suits:
+        suit_counts[suit] = suit_counts.get(suit, 0) + 1
+    
+    max_suit_count = max(suit_counts.values()) if suit_counts else 0
+    flush_draw = max_suit_count >= 3
+    
+    # Count ranks for pairs/trips
+    rank_counts = {}
+    for rank in ranks:
+        rank_counts[rank] = rank_counts.get(rank, 0) + 1
+    
+    max_rank_count = max(rank_counts.values()) if rank_counts else 0
+    pair = max_rank_count >= 2
+    trips = max_rank_count >= 3
+    
+    # Check for straight draws (simplified)
+    sorted_ranks = sorted(set(ranks))
+    straight_draw = False
+    if len(sorted_ranks) >= 3:
+        # Check for consecutive ranks or near-consecutive
+        for i in range(len(sorted_ranks) - 2):
+            if sorted_ranks[i+2] - sorted_ranks[i] <= 4:  # Within 4 ranks = potential straight
+                straight_draw = True
+                break
+    
+    # Coordination score (higher = more coordinated)
+    coordination = 0.0
+    if flush_draw:
+        coordination += 0.4
+    if straight_draw:
+        coordination += 0.4
+    if pair:
+        coordination += 0.3
+    if trips:
+        coordination += 0.5
+    
+    coordination = min(1.0, coordination)
+    
+    return {
+        'flush_draw': flush_draw,
+        'straight_draw': straight_draw,
+        'pair': pair,
+        'trips': trips,
+        'coordinated': coordination
+    }
+
+
+def calculate_equity_with_board(hero_cards: Tuple[int, int], villain_cards: Tuple[int, int], 
+                               board: Tuple[int, ...], num_simulations: int = 1000) -> float:
+    """
+    Calculate equity given known board cards.
+    
+    Args:
+        hero_cards: Hero's hole cards
+        villain_cards: Villain's hole cards  
+        board: Known community cards (3+ cards)
+        num_simulations: Number of Monte Carlo simulations
+        
+    Returns:
+        Equity for hero (0.0 to 1.0)
+    """
+    if len(board) < 3:
+        raise ValueError("Board must have at least 3 cards")
+    
+    # Cards already used
+    used_cards = set(hero_cards + villain_cards + board)
+    remaining_deck = [card for card in range(52) if card not in used_cards]
+    
+    if len(board) == 5:
+        # River - no more cards to deal, just evaluate
+        hero_hand = list(hero_cards) + list(board) 
+        villain_hand = list(villain_cards) + list(board)
+        
+        hero_strength = evaluate_hand_strength(hero_hand)
+        villain_strength = evaluate_hand_strength(villain_hand)
+        
+        if hero_strength > villain_strength:
+            return 1.0
+        elif hero_strength == villain_strength:
+            return 0.5
+        else:
+            return 0.0
+    
+    # Need to deal remaining cards
+    cards_needed = 5 - len(board)
+    
+    wins = 0
+    ties = 0
+    
+    import random
+    for _ in range(num_simulations):
+        # Complete the board
+        remaining_cards = random.sample(remaining_deck, cards_needed)
+        full_board = board + tuple(remaining_cards)
+        
+        # Evaluate hands
+        hero_hand = list(hero_cards) + list(full_board)
+        villain_hand = list(villain_cards) + list(full_board)
+        
+        hero_strength = evaluate_hand_strength(hero_hand)
+        villain_strength = evaluate_hand_strength(villain_hand)
+        
+        if hero_strength > villain_strength:
+            wins += 1
+        elif hero_strength == villain_strength:
+            ties += 1
+    
+    equity = (wins + 0.5 * ties) / num_simulations
+    return equity
 
 
 if __name__ == "__main__":

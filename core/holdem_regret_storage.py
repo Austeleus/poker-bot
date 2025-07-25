@@ -213,6 +213,7 @@ class HoldemRegretTable:
         self._strategy_cache: Dict[str, np.ndarray] = {}
         self._cache_dirty: Set[str] = set()
         
+        
         # Statistics
         self.total_iterations = 0
         self.info_set_count = 0
@@ -364,7 +365,7 @@ class HoldemRegretTable:
         """Clear strategy cache to force recomputation."""
         self._strategy_cache.clear()
         self._cache_dirty.clear()
-        
+    
     def save(self, filepath: str) -> None:
         """Save regret table to file."""
         data = {
@@ -491,6 +492,7 @@ class HoldemStrategyProfile:
             'total_memory_mb': total_memory,
             'player_stats': [table.get_stats() for table in self.regret_tables]
         }
+    
 
 
 def create_minimal_abstract_key(info_set: HoldemInfoSet) -> str:

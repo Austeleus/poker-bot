@@ -40,8 +40,7 @@ class StrategyVisualizer:
             small_blind=1,
             big_blind=2, 
             initial_stack=200,
-            preflop_only=True
-        )
+                    )
         
         try:
             # Handle different path formats

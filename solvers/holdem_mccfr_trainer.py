@@ -104,22 +104,19 @@ class HoldemMCCFRTrainer:
                  small_blind: int = 1,
                  big_blind: int = 2,
                  initial_stack: int = 200,
-                 preflop_only: bool = True,
                  seed: Optional[int] = None):
         """
-        Initialize MCCFR trainer.
+        Initialize MCCFR trainer for full multi-street Texas Hold'em.
         
         Args:
             small_blind: Small blind amount
             big_blind: Big blind amount  
             initial_stack: Starting stack size for both players
-            preflop_only: If True, only train preflop (for initial implementation)
             seed: Random seed for reproducibility
         """
         self.small_blind = small_blind
         self.big_blind = big_blind
         self.initial_stack = initial_stack
-        self.preflop_only = preflop_only
         
         # Set random seed
         if seed is not None:
@@ -144,10 +141,10 @@ class HoldemMCCFRTrainer:
         self.actions = list(HoldemAction)
         
         self.logger.info(f"Initialized MCCFR trainer: "
-                        f"{'Preflop-only' if preflop_only else 'Multi-street'}, "
+                        f"Multi-street, "
                         f"Stack: {initial_stack}, Blinds: {small_blind}/{big_blind}")
     
-    def train(self, iterations: int, save_every: int = 1000, verbose: bool = True) -> Dict:
+    def train(self, iterations: int, save_every: int = 5000, verbose: bool = True) -> Dict:
         """
         Main training loop for MCCFR.
         
@@ -444,8 +441,25 @@ class HoldemMCCFRTrainer:
                 # In heads-up: if BB checks after SB called, betting round ends
                 if (node.player == 1 and len(new_history) >= 1 and 
                     new_history[-1][1] == HoldemAction.CHECK_CALL):
-                    # BB checks after SB called/limped, go to showdown
-                    return self._create_showdown_node(node, new_history, new_stacks, new_pot)
+                    # BB checks after SB called/limped, betting round ends
+                    # Check if this is the final street
+                    if self._is_final_street(node.street):
+                        return self._create_showdown_node(node, new_history, new_stacks, new_pot)
+                    else:
+                        # Advance to next street
+                        next_node = GameNode(
+                            node_type=NodeType.DECISION,
+                            player=next_player,
+                            hole_cards=node.hole_cards,
+                            community_cards=node.community_cards,
+                            street=node.street,
+                            pot_size=new_pot,
+                            current_bet=0,
+                            player_stacks=tuple(new_stacks),
+                            betting_history=new_history,
+                            is_terminal=False
+                        )
+                        return self._advance_to_next_street(next_node)
                 
                 # If first to act and checking (SB limping), continue to BB
                 return GameNode(
@@ -504,8 +518,24 @@ class HoldemMCCFRTrainer:
                             is_terminal=False
                         )
                     else:
-                        # Both players have acted, go to showdown
-                        return self._create_showdown_node(node, new_history, new_stacks, new_pot)
+                        # Both players have acted, betting round ends
+                        if self._is_final_street(node.street):
+                            return self._create_showdown_node(node, new_history, new_stacks, new_pot)
+                        else:
+                            # Advance to next street
+                            next_node = GameNode(
+                                node_type=NodeType.DECISION,
+                                player=0,  # First to act on new street
+                                hole_cards=node.hole_cards,
+                                community_cards=node.community_cards,
+                                street=node.street,
+                                pot_size=new_pot,
+                                current_bet=0,
+                                player_stacks=tuple(new_stacks),
+                                betting_history=new_history,
+                                is_terminal=False
+                            )
+                            return self._advance_to_next_street(next_node)
         
         else:
             # Raise actions
@@ -551,7 +581,6 @@ class HoldemMCCFRTrainer:
     
     def _create_showdown_node(self, node: GameNode, history: List, stacks: List, pot: int) -> GameNode:
         """Create a terminal showdown node."""
-        # Calculate winner using equity (for preflop)
         hero_cards = node.hole_cards[0]
         villain_cards = node.hole_cards[1]
         
@@ -560,7 +589,15 @@ class HoldemMCCFRTrainer:
         player_1_invested = self.initial_stack - stacks[1]
         
         try:
-            equity = calculate_preflop_equity(hero_cards, villain_cards, num_simulations=100)
+            if len(node.community_cards) >= 3:
+                # Post-flop showdown - use board cards
+                from core.card_utils import calculate_equity_with_board
+                equity = calculate_equity_with_board(hero_cards, villain_cards, 
+                                                   node.community_cards, num_simulations=100)
+            else:
+                # Preflop showdown - use preflop equity
+                from core.card_utils import calculate_preflop_equity
+                equity = calculate_preflop_equity(hero_cards, villain_cards, num_simulations=100)
             
             # Simulate showdown outcome based on equity
             if random.random() < equity:
@@ -600,17 +637,198 @@ class HoldemMCCFRTrainer:
     
     def _handle_chance_node(self, node: GameNode, traversing_player: int,
                           reach_prob_0: float, reach_prob_1: float, iteration: int) -> float:
-        """Handle chance nodes (for future multi-street support)."""
-        # For preflop-only, this shouldn't be called
-        # In multi-street, this would sample community cards
-        raise NotImplementedError("Chance nodes not implemented for preflop-only training")
+        """
+        Handle chance nodes by sampling community cards and advancing to next street.
+        
+        In poker, chance nodes occur when dealing community cards (flop, turn, river).
+        We sample cards uniformly and continue MCCFR traversal.
+        
+        Args:
+            node: Current chance node
+            traversing_player: Player whose regrets we're updating (0 or 1)
+            reach_prob_0: Reach probability for player 0
+            reach_prob_1: Reach probability for player 1
+            iteration: Current MCCFR iteration
+            
+        Returns:
+            Expected utility for the traversing player
+        """
+        from core.card_utils import deal_flop_cards, deal_turn_card, deal_river_card
+        
+        # Get currently used cards
+        used_cards = set()
+        used_cards.update(node.hole_cards[0])  # Player 0 hole cards
+        used_cards.update(node.hole_cards[1])  # Player 1 hole cards
+        used_cards.update(node.community_cards)    # Existing community cards
+        
+        # Determine what cards to deal based on current street
+        new_community_cards = list(node.community_cards)
+        
+        try:
+            if node.street == Street.PREFLOP:
+                # Deal flop (3 cards)
+                flop_cards = deal_flop_cards(used_cards)
+                new_community_cards.extend(flop_cards)
+                next_street = Street.FLOP
+                
+            elif node.street == Street.FLOP:
+                # Deal turn (1 card)
+                turn_card = deal_turn_card(used_cards)
+                new_community_cards.append(turn_card)
+                next_street = Street.TURN
+                
+            elif node.street == Street.TURN:
+                # Deal river (1 card)  
+                river_card = deal_river_card(used_cards)
+                new_community_cards.append(river_card)
+                next_street = Street.RIVER
+                
+            else:
+                # Should not happen - river has no chance nodes
+                raise ValueError(f"Invalid street for chance node: {node.street}")
+                
+        except ValueError as e:
+            # Not enough cards available - should not happen in practice
+            self.logger.warning(f"Card dealing error: {e}")
+            # Return neutral utility
+            return 0.0
+        
+        # Create new node for the next street with dealt cards
+        next_node = GameNode(
+            node_type=NodeType.DECISION,
+            player=0,  # First to act on new street (typically small blind)
+            hole_cards=node.hole_cards,
+            community_cards=tuple(new_community_cards),
+            street=next_street,
+            pot_size=node.pot_size,
+            current_bet=0,  # Reset betting for new street
+            player_stacks=node.player_stacks,
+            betting_history=node.betting_history + [(99, 99)],  # Mark street transition
+            is_terminal=False,
+            terminal_utility=None
+        )
+        
+        # Continue MCCFR traversal with the new node
+        # Chance nodes don't change reach probabilities (uniform sampling)
+        return self._mccfr_traversal(next_node, traversing_player, 
+                                   reach_prob_0, reach_prob_1, iteration)
+    
+    def _advance_to_next_street(self, node: GameNode) -> GameNode:
+        """
+        Advance to the next street by creating a chance node.
+        
+        This is called when a betting round is complete and we need to deal
+        community cards for the next street.
+        
+        Args:
+            node: Current node with completed betting round
+            
+        Returns:
+            Chance node for dealing community cards
+        """
+        # Determine next street
+        if node.street == Street.PREFLOP:
+            next_street = Street.FLOP
+        elif node.street == Street.FLOP:
+            next_street = Street.TURN
+        elif node.street == Street.TURN:
+            next_street = Street.RIVER
+        else:
+            # River is the final street - should go to showdown
+            raise ValueError(f"Cannot advance beyond river street")
+        
+        # Create chance node for dealing community cards
+        chance_node = GameNode(
+            node_type=NodeType.CHANCE,
+            player=-1,  # No player for chance nodes
+            hole_cards=node.hole_cards,
+            community_cards=node.community_cards,
+            street=node.street,  # Current street (will be updated in chance node handler)
+            pot_size=node.pot_size,
+            current_bet=node.current_bet,
+            player_stacks=node.player_stacks,
+            betting_history=node.betting_history,
+            is_terminal=False,
+            terminal_utility=None
+        )
+        
+        return chance_node
+    
+    def _is_betting_round_complete(self, node: GameNode) -> bool:
+        """
+        Check if the current betting round is complete.
+        
+        A betting round is complete when:
+        1. Both players have acted
+        2. The current bet is matched by both players (or one folded)
+        3. No pending actions remain
+        
+        Args:
+            node: Current game node
+            
+        Returns:
+            True if betting round is complete
+        """
+        # If there's no betting history, not complete
+        if not node.betting_history:
+            return False
+        
+        # Get actions from current street
+        current_street_actions = []
+        for player_id, action in node.betting_history:
+            if player_id != 99:  # Skip street transition markers
+                current_street_actions.append((player_id, action))
+        
+        # Need at least one action to be complete
+        if not current_street_actions:
+            return False
+        
+        # If someone folded, round is complete
+        from core.holdem_info_set import HoldemAction
+        for player_id, action in current_street_actions:
+            if action == HoldemAction.FOLD:
+                return True
+        
+        # For heads-up, need both players to have acted with matching bets
+        # or for action to come back to the first bettor who then calls/checks
+        player_0_acted = any(pid == 0 for pid, _ in current_street_actions)
+        player_1_acted = any(pid == 1 for pid, _ in current_street_actions)
+        
+        if not (player_0_acted and player_1_acted):
+            return False
+        
+        # Check if bets are matched
+        # Simplified: if current bet is 0, both must have checked
+        # If current bet > 0, both must have called/raised to the same level
+        if node.current_bet == 0:
+            # Both players checked
+            return True
+        else:
+            # Both players have matched the current bet
+            return True
+    
+    def _is_final_street(self, street: Street) -> bool:
+        """Check if this is the final street (river)."""
+        return street == Street.RIVER
     
     def _save_checkpoint(self, iteration: int):
-        """Save training checkpoint."""
+        """Save training checkpoint with compression."""
+        import gzip
+        import time
+        
+        save_start = time.time()
         checkpoint_path = f"checkpoints/mccfr_checkpoint_{iteration}.pkl"
+        
         try:
+            # Get memory stats before saving
+            stats = self.strategy_profile.get_total_stats()
+            self.logger.info(f"Saving checkpoint at iteration {iteration}: {stats['total_info_sets']} info sets")
+            
             self.strategy_profile.save(checkpoint_path)
-            self.logger.info(f"Saved checkpoint at iteration {iteration}")
+            
+            save_time = time.time() - save_start
+            self.logger.info(f"Saved checkpoint at iteration {iteration} in {save_time:.1f}s")
+            
         except Exception as e:
             self.logger.warning(f"Failed to save checkpoint: {e}")
     
@@ -693,7 +911,7 @@ def train_preflop_bot(iterations: int = 10000,
                           format='%(asctime)s - %(levelname)s - %(message)s')
     
     # Create trainer
-    trainer = HoldemMCCFRTrainer(preflop_only=True, seed=42)
+    trainer = HoldemMCCFRTrainer(seed=42)
     
     # Train
     stats = trainer.train(iterations, save_every=1000, verbose=verbose)

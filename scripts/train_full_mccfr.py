@@ -218,7 +218,6 @@ def main():
         small_blind=1,
         big_blind=2, 
         initial_stack=200,
-        preflop_only=True,
         seed=args.seed
     )
     

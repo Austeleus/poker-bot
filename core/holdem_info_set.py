@@ -331,6 +331,26 @@ class HoldemInfoSet:
             if self.community_cards:
                 board_bucket = get_street_specific_bucket(self.hole_cards, self.community_cards, self.street)
                 parts.append(f"BB{board_bucket}")
+                
+                # Add board texture for strategic differentiation
+                from core.card_utils import get_board_texture
+                texture = get_board_texture(self.community_cards)
+                
+                # Create compact texture signature
+                texture_sig = ""
+                if texture['flush_draw']:
+                    texture_sig += "F"
+                if texture['straight_draw']:
+                    texture_sig += "S"
+                if texture['pair']:
+                    texture_sig += "P"
+                if texture['trips']:
+                    texture_sig += "T"
+                
+                if texture_sig:
+                    parts.append(f"TX{texture_sig}")
+                else:
+                    parts.append("TXDry")  # Dry board
             
             # Add chance seed for deterministic sampling (if available)
             if self.chance_seed is not None:

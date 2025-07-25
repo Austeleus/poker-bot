@@ -63,7 +63,7 @@ def test_legal_actions():
     print("Testing Legal Actions")
     print("-" * 30)
     
-    trainer = HoldemMCCFRTrainer(preflop_only=True)
+    trainer = HoldemMCCFRTrainer()
     
     # Scenario 1: Player facing a bet
     node_facing_bet = GameNode(
@@ -111,7 +111,7 @@ def test_action_application():
     print("Testing Action Application")
     print("-" * 30)
     
-    trainer = HoldemMCCFRTrainer(preflop_only=True)
+    trainer = HoldemMCCFRTrainer()
     
     # Create initial node
     root_node = trainer._create_root_node(((48, 49), (0, 1)))  # AA vs 22
@@ -139,7 +139,7 @@ def test_terminal_utilities():
     print("Testing Terminal Utilities")
     print("-" * 30)
     
-    trainer = HoldemMCCFRTrainer(preflop_only=True, seed=42)
+    trainer = HoldemMCCFRTrainer(, seed=42)
     
     # Create showdown scenarios
     hole_cards = ((48, 49), (0, 1))  # AA vs 22 - AA should win most of the time
@@ -191,7 +191,7 @@ def test_small_training_run():
     print("Testing Small MCCFR Training Run")
     print("-" * 40)
     
-    trainer = HoldemMCCFRTrainer(preflop_only=True, seed=42)
+    trainer = HoldemMCCFRTrainer(, seed=42)
     
     # Train for just a few iterations
     stats = trainer.train(iterations=10, save_every=0, verbose=False)
@@ -242,7 +242,7 @@ def test_strategy_convergence():
     print("Testing Strategy Convergence")
     print("-" * 35)
     
-    trainer = HoldemMCCFRTrainer(preflop_only=True, seed=42)
+    trainer = HoldemMCCFRTrainer(, seed=42)
     
     # Train for more iterations to see some learning
     stats = trainer.train(iterations=100, save_every=0, verbose=False)
@@ -299,7 +299,7 @@ def test_algorithm_correctness():
     print("Testing Algorithm Correctness")
     print("-" * 35)
     
-    trainer = HoldemMCCFRTrainer(preflop_only=True, seed=42)
+    trainer = HoldemMCCFRTrainer(, seed=42)
     
     # Train for a reasonable number of iterations
     stats = trainer.train(iterations=500, save_every=0, verbose=False)

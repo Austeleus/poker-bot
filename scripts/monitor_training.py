@@ -24,7 +24,7 @@ def analyze_model(model_path):
     print("=" * 60)
     
     # Load the trained model
-    trainer = HoldemMCCFRTrainer(preflop_only=True)
+    trainer = HoldemMCCFRTrainer()
     
     try:
         trainer.load_strategy(model_path)
@@ -133,7 +133,7 @@ def monitor_checkpoints():
         filepath = os.path.join(checkpoint_dir, filename)
         
         # Load checkpoint  
-        trainer = HoldemMCCFRTrainer(preflop_only=True)
+        trainer = HoldemMCCFRTrainer()
         try:
             trainer.load_strategy(filepath.replace("_player_0.pkl", "").replace("_player_1.pkl", ""))
             stats = trainer.strategy_profile.get_total_stats()
