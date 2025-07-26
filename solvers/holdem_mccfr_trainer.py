@@ -66,18 +66,36 @@ class GameNode:
             )
             betting_rounds = [current_round]
         
+        # Determine actual position based on stack sizes (who paid which blind)
+        # The player with higher remaining stack paid the small blind (button/SB)
+        # The player with lower remaining stack paid the big blind (BB)
+        # Use hardcoded values that match trainer defaults for now
+        initial_stack = 200  # Should match trainer's initial_stack
+        small_blind = 1
+        big_blind = 2
+        
+        if self.player_stacks[0] == initial_stack - small_blind:
+            # Player 0 paid SB (button), Player 1 paid BB
+            sb_player, bb_player = 0, 1
+        else:
+            # Player 1 paid SB (button), Player 0 paid BB  
+            sb_player, bb_player = 1, 0
+            
+        # Position: 0 = SB/Button (first to act), 1 = BB (second to act)
+        position = 0 if player == sb_player else 1
+        
         return HoldemInfoSet(
             player=player,
             hole_cards=self.hole_cards[player],
             community_cards=self.community_cards,
             street=self.street,
             betting_history=betting_rounds,
-            position=0 if player == 0 else 1,  # Button vs BB
+            position=position,
             stack_sizes=self.player_stacks,
             pot_size=self.pot_size,
             current_bet=self.current_bet,
-            small_blind=1,
-            big_blind=2,
+            small_blind=small_blind,
+            big_blind=big_blind,
             num_players=2,
             action_pointer=self.player
         )
@@ -216,20 +234,33 @@ class HoldemMCCFRTrainer:
     
     def _create_root_node(self, hole_cards: Tuple[Tuple[int, int], Tuple[int, int]]) -> GameNode:
         """Create the root node of the game tree with initial blinds posted."""
-        # In heads-up: Player 0 is Button/Small Blind, Player 1 is Big Blind
-        # Preflop: Button/SB acts first
+        # CRITICAL FIX: Randomly assign SB/BB positions (50/50) for training symmetry
+        # This ensures both players get equal training on both positions
+        
+        if random.random() < 0.5:
+            # Player 0 = SB (acts first), Player 1 = BB
+            first_player = 0
+            player_stacks = (
+                self.initial_stack - self.small_blind,  # Player 0 (SB)
+                self.initial_stack - self.big_blind     # Player 1 (BB)
+            )
+        else:
+            # Player 1 = SB (acts first), Player 0 = BB  
+            first_player = 1
+            player_stacks = (
+                self.initial_stack - self.big_blind,    # Player 0 (BB)
+                self.initial_stack - self.small_blind   # Player 1 (SB)
+            )
+            
         return GameNode(
             node_type=NodeType.DECISION,
-            player=0,  # Button/Small Blind acts first in heads-up preflop
+            player=first_player,
             hole_cards=hole_cards,
             community_cards=(),
             street=Street.PREFLOP,
             pot_size=self.small_blind + self.big_blind,
-            current_bet=self.big_blind,  # Amount to call for the Button
-            player_stacks=(
-                self.initial_stack - self.small_blind,  # Button/SB
-                self.initial_stack - self.big_blind     # BB
-            ),
+            current_bet=self.big_blind,  # Amount SB needs to call
+            player_stacks=player_stacks,
             betting_history=[],
             is_terminal=False
         )
@@ -438,8 +469,14 @@ class HoldemMCCFRTrainer:
                 # Check
                 next_player = 1 - node.player
                 
+                # Determine who is BB based on stack sizes
+                if node.player_stacks[0] == self.initial_stack - self.small_blind:
+                    bb_player = 1  # Player 1 is BB
+                else:
+                    bb_player = 0  # Player 0 is BB
+                
                 # In heads-up: if BB checks after SB called, betting round ends
-                if (node.player == 1 and len(new_history) >= 1 and 
+                if (node.player == bb_player and len(new_history) >= 1 and 
                     new_history[-1][1] == HoldemAction.CHECK_CALL):
                     # BB checks after SB called/limped, betting round ends
                     # Check if this is the final street
@@ -476,9 +513,16 @@ class HoldemMCCFRTrainer:
                 )
             else:
                 # Call: need to match the current bet
-                # For Button calling BB: needs to add (BB - SB) = 1 more chip
-                if node.player == 0 and node.current_bet == self.big_blind and len(node.betting_history) == 0:
-                    # Button calling the big blind preflop
+                # Determine who is SB and BB based on stack sizes
+                if node.player_stacks[0] == self.initial_stack - self.small_blind:
+                    sb_player, bb_player = 0, 1  # Player 0 is SB, Player 1 is BB
+                else:
+                    sb_player, bb_player = 1, 0  # Player 1 is SB, Player 0 is BB
+                    
+                # Special case: SB calling BB preflop (completing the blind)
+                if (node.player == sb_player and node.current_bet == self.big_blind and 
+                    len(node.betting_history) == 0):
+                    # SB calling the big blind preflop
                     call_amount = self.big_blind - self.small_blind  # Just need to complete the BB
                     new_stacks[node.player] -= call_amount
                     new_pot += call_amount
@@ -486,7 +530,7 @@ class HoldemMCCFRTrainer:
                     # Special case: SB completed, now BB can raise or check to end round
                     return GameNode(
                         node_type=NodeType.DECISION,
-                        player=1,  # BB gets option
+                        player=bb_player,  # BB gets option
                         hole_cards=node.hole_cards,
                         community_cards=node.community_cards,
                         street=node.street,
